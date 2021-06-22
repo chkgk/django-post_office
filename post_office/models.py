@@ -169,6 +169,7 @@ class Email(models.Model):
         Sends email and log the result.
         """
         try:
+            print(self.email_message().connection)
             self.email_message().send()
             status = STATUS.sent
             message = ''

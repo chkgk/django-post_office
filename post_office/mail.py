@@ -255,24 +255,18 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None):
 
     logger.info('Process started, sending %s emails' % email_count)
 
-    def send(email):
-        try:
-            email.dispatch(log_level=log_level, commit=False,
-                           disconnect_after_delivery=False)
-            sent_emails.append(email)
-            logger.debug('Successfully sent email #%d' % email.id)
-        except Exception as e:
-            logger.debug('Failed to send email #%d' % email.id)
-            failed_emails.append((email, e))
-
     # Prepare emails before we send these to threads for sending
     # So we don't need to access the DB from within threads
     for email in emails:
         # Sometimes this can fail, for example when trying to render
         # email from a faulty Django template
         try:
-            send(email.prepare_email_message())
+            email.prepare_email_message()
+            email.dispatch(log_level=log_level, commit=False, disconnect_after_delivery=False)
+            sent_emails.append(email)
+            logger.debug('Successfully sent email #%d' % email.id)
         except Exception as e:
+            logger.debug('Failed to send email #%d' % email.id)
             failed_emails.append((email, e))
 
     # number_of_threads = min(get_threads_per_process(), email_count)

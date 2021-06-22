@@ -23,6 +23,9 @@ from .validators import validate_email_with_name, validate_template_syntax
 PRIORITY = namedtuple('PRIORITY', 'low medium high now')._make(range(4))
 STATUS = namedtuple('STATUS', 'sent failed queued requeued')._make(range(4))
 
+from .logutils import setup_loghandlers
+logger = setup_loghandlers("INFO")
+
 
 class Email(models.Model):
     """
@@ -169,7 +172,7 @@ class Email(models.Model):
         Sends email and log the result.
         """
         try:
-            print(self.email_message().connection)
+            logger.info(self.email_message().connection)
             self.email_message().send()
             status = STATUS.sent
             message = ''

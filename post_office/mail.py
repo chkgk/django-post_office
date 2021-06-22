@@ -276,7 +276,7 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None):
     # pool.close()
     # pool.join()
 
-    connections.close()
+    # connections.close()
 
     # Update statuses of sent emails
     email_ids = [email.id for email in sent_emails]

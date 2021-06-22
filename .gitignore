@@ -12,6 +12,8 @@ dist/
 eggs/
 sdist/
 tmp/
+venv/
+.idea/
 *.egg-info/
 .installed.cfg
 *.egg

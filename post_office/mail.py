@@ -2,6 +2,7 @@ import sys
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.mail import send_mass_mail
 from django.db import connection as db_connection
 from django.db.models import Q
 from django.template import Context, Template
@@ -270,16 +271,16 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None):
         # Sometimes this can fail, for example when trying to render
         # email from a faulty Django template
         try:
-            email.prepare_email_message()
+            send(email.prepare_email_message())
         except Exception as e:
             failed_emails.append((email, e))
 
-    number_of_threads = min(get_threads_per_process(), email_count)
-    pool = ThreadPool(number_of_threads)
-
-    pool.map(send, emails)
-    pool.close()
-    pool.join()
+    # number_of_threads = min(get_threads_per_process(), email_count)
+    # pool = ThreadPool(number_of_threads)
+    # 
+    # pool.map(send, emails)
+    # pool.close()
+    # pool.join()
 
     connections.close()
 

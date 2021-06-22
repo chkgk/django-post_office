@@ -222,6 +222,7 @@ def send_queued(processes=1, log_level=None):
             )
         else:
             email_lists = split_emails(queued_emails, processes)
+            logger.info(email_lists)
 
             pool = Pool(processes)
             results = pool.map(_send_bulk, email_lists)

@@ -1,8 +1,9 @@
 import sys
+import math
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.mail import send_mass_mail
+from django.core.mail import send_mass_mail, get_connection
 from django.db import connection as db_connection
 from django.db.models import Q
 from django.template import Context, Template
@@ -17,12 +18,13 @@ from .logutils import setup_loghandlers
 from .models import Email, EmailTemplate, Log, PRIORITY, STATUS
 from .settings import (
     get_available_backends, get_batch_size, get_log_level, get_max_retries, get_message_id_enabled,
-    get_message_id_fqdn, get_retry_timedelta, get_sending_order, get_threads_per_process,
+    get_message_id_fqdn, get_retry_timedelta, get_sending_order, get_threads_per_process, get_backend
 )
 from .signals import email_queued
 from .utils import (
     create_attachments, get_email_template, parse_emails, parse_priority, split_emails,
 )
+
 
 logger = setup_loghandlers("INFO")
 
@@ -160,7 +162,9 @@ def send(recipients=None, sender=None, template=None, context=None, subject='',
 
     if priority == PRIORITY.now:
         email.dispatch(log_level=log_level)
-    email_queued.send(sender=Email, emails=[email])
+        
+    if commit:
+        email_queued.send(sender=Email, emails=[email])
 
     return email
 
@@ -177,7 +181,7 @@ def send_many(kwargs_list):
         email_queued.send(sender=Email, emails=emails)
 
 
-def get_queued():
+def get_queued(all=False):
     """
     Returns the queryset of emails eligible for sending – fulfilling these conditions:
      - Status is queued or requeued
@@ -190,9 +194,14 @@ def get_queued():
         (Q(scheduled_time__lte=now) | Q(scheduled_time__isnull=True)) &
         (Q(expires_at__gt=now) | Q(expires_at__isnull=True))
     )
+    if not all:
+        return Email.objects.filter(query) \
+                    .select_related('template') \
+                    .order_by(*get_sending_order()).prefetch_related('attachments')[:get_batch_size()]
+
     return Email.objects.filter(query) \
-                .select_related('template') \
-                .order_by(*get_sending_order()).prefetch_related('attachments')[:get_batch_size()]
+               .select_related('template') \
+               .order_by(*get_sending_order()).prefetch_related('attachments')
 
 
 def send_queued(processes=1, log_level=None):
@@ -232,15 +241,16 @@ def send_queued(processes=1, log_level=None):
             total_failed = sum(result[1] for result in results)
             total_requeued = [result[2] for result in results]
 
-    logger.info(
-        '%s emails attempted, %s sent, %s failed, %s requeued',
-        total_email, total_sent, total_failed, total_requeued,
-    )
+
+        logger.info(
+            '%s emails attempted, %s sent, %s failed, %s requeued',
+            total_email, total_sent, total_failed, total_requeued,
+        )
 
     return total_sent, total_failed, total_requeued
 
 
-def _send_bulk(emails, uses_multiprocessing=True, log_level=None):
+def _send_bulk(emails, uses_multiprocessing=True, log_level=None, connection=None):
     # Multiprocessing does not play well with database connection
     # Fix: Close connections on forking process
     # https://groups.google.com/forum/#!topic/django-users/eCAIY9DAfG0
@@ -255,6 +265,17 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None):
     email_count = len(emails)
 
     logger.info('Process started, sending %s emails' % email_count)
+    if connection is None:
+        raise Exception('NO CONNECTION')
+    # def send(email):
+    #     try:
+    #         email.dispatch(log_level=log_level, commit=False,
+    #                        disconnect_after_delivery=False)
+    #         sent_emails.append(email)
+    #         logger.debug('Successfully sent email #%d' % email.id)
+    #     except Exception as e:
+    #         logger.debug('Failed to send email #%d' % email.id)
+    #         failed_emails.append((email, e))
 
     # Prepare emails before we send these to threads for sending
     # So we don't need to access the DB from within threads
@@ -262,10 +283,12 @@ def _send_bulk(emails, uses_multiprocessing=True, log_level=None):
         # Sometimes this can fail, for example when trying to render
         # email from a faulty Django template
         try:
-            email.prepare_email_message()
-            email.dispatch(log_level=log_level, commit=False, disconnect_after_delivery=False)
+            email.prepare_email_message(connection=connection)
+            email.dispatch(log_level=log_level, commit=False,
+                           disconnect_after_delivery=False)
             sent_emails.append(email)
             logger.debug('Successfully sent email #%d' % email.id)
+
         except Exception as e:
             logger.debug('Failed to send email #%d' % email.id)
             failed_emails.append((email, e))
@@ -342,17 +365,33 @@ def send_queued_mail_until_done(lockfile=default_lockfile, processes=1, log_leve
     try:
         with FileLock(lockfile):
             logger.info('Acquired lock for sending queued emails at %s.lock', lockfile)
-            while True:
-                try:
-                    send_queued(processes, log_level)
-                except Exception as e:
-                    logger.error(e, exc_info=sys.exc_info(), extra={'status_code': 500})
-                    raise
+            all_queued = get_queued(all=True)
+            num_all = len(all_queued)
+            if all_queued.exists() and num_all > 0:
+                batch_size = get_batch_size()
+                num_batches = math.ceil(num_all / batch_size)
+                if num_batches > 1:
+                    batches = split_emails(all_queued, num_batches)
+                else:
+                    batches = [all_queued]
+                for batch in batches:
+                    connection = get_connection((get_backend('default')))
+                    connection.open()
+                    try:
+                        _send_bulk(
+                            emails=batch,
+                            uses_multiprocessing=False,
+                            log_level=log_level,
+                            connection=connection
+                        )
+                    except Exception as e:
+                        logger.error(e, exc_info=sys.exc_info(), extra={'status_code': 500})
+                        raise
+                    connection.close()
 
                 # Close DB connection to avoid multiprocessing errors
                 db_connection.close()
+            
 
-                if not get_queued().exists():
-                    break
     except FileLocked:
         logger.info('Failed to acquire lock, terminating now.')

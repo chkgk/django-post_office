@@ -23,9 +23,6 @@ from .validators import validate_email_with_name, validate_template_syntax
 PRIORITY = namedtuple('PRIORITY', 'low medium high now')._make(range(4))
 STATUS = namedtuple('STATUS', 'sent failed queued requeued')._make(range(4))
 
-from .logutils import setup_loghandlers
-logger = setup_loghandlers("INFO")
-
 
 class Email(models.Model):
     """
@@ -96,7 +93,7 @@ class Email(models.Model):
 
         return self.prepare_email_message()
 
-    def prepare_email_message(self):
+    def prepare_email_message(self, connection=None):
         """
         Returns a django ``EmailMessage`` or ``EmailMultiAlternatives`` object,
         depending on whether html_message is empty.
@@ -117,7 +114,9 @@ class Email(models.Model):
             multipart_template = None
             html_message = self.html_message
 
-        connection = connections[self.backend_alias or 'default']
+        if connection is None:
+            connection = connections[self.backend_alias or 'default']
+            
         if isinstance(self.headers, dict) or self.expires_at or self.message_id:
             headers = dict(self.headers or {})
             if self.expires_at:
@@ -172,7 +171,6 @@ class Email(models.Model):
         Sends email and log the result.
         """
         try:
-            logger.info(self.email_message().connection)
             self.email_message().send()
             status = STATUS.sent
             message = ''
@@ -188,7 +186,8 @@ class Email(models.Model):
                 raise
 
         if disconnect_after_delivery:
-            connections.close()
+            pass
+            # connections.close()
 
         if commit:
             self.status = status

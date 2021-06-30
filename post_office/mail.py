@@ -395,3 +395,28 @@ def send_queued_mail_until_done(lockfile=default_lockfile, processes=1, log_leve
 
     except FileLocked:
         logger.info('Failed to acquire lock, terminating now.')
+        
+def send_one_batch(lockfile=default_lockfile, processes=1, log_level=None):
+    try:
+        with FileLock(lockfile):
+            queued = get_queued()
+            if queued.exists() and len(queued) > 0:
+                connection = get_connection((get_backend('default')))
+                connection.open()
+                try:
+                    _send_bulk(
+                        emails=queued,
+                        uses_multiprocessing=False,
+                        log_level=log_level,
+                        connection=connection
+                    )
+                except Exception as e:
+                    logger.error(e, exc_info=sys.exc_info(), extra={'status_code': 500})
+                    raise
+                connection.close()
+
+            # Close DB connection to avoid multiprocessing errors
+            db_connection.close()
+
+    except FileLocked:
+        logger.info('Failed to acquire lock, terminating now.')

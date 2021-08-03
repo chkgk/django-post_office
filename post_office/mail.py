@@ -161,7 +161,7 @@ def send(recipients=None, sender=None, template=None, context=None, subject='',
         email.attachments.add(*attachments)
 
     if priority == PRIORITY.now:
-        email.dispatch(log_level=log_level, disconnect_after_delivery=True)
+        email.dispatch(log_level=log_level)
         
     if commit:
         email_queued.send(sender=Email, emails=[email])

@@ -186,7 +186,7 @@ class Email(models.Model):
                 raise
 
         if disconnect_after_delivery:
-            connections.close()
+            pass
 
         if commit:
             self.status = status
